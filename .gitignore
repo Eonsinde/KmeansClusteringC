@@ -1,0 +1,8 @@
+# Build artifacts
+/build/
+*.o
+*.obj
+*.exe
+
+# Generated clustering output
+/resources/kmeans-output.txt
