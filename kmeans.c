@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
+#include <errno.h>
 
 
 // --------------------------- Core ---------------------------
@@ -16,8 +18,14 @@ ParsedData ReadFile(const char* path)
     
     ifilePtr = fopen(path, "r");
 
-    if (!ifilePtr)
-        printf("Resources: Could not open %s\n", path);
+    if (!ifilePtr) {
+        // strerror explains why (e.g. "No such file or directory")
+        fprintf(stderr, "Resources: Could not open %s: %s\n", path, strerror(errno));
+
+        // Return an empty result (data == NULL) so the caller can stop safely
+        ParsedData empty = { NULL, 0, NUM_COLUMNS };
+        return empty;
+    }
 
     // Get the number of lines (same as num of rows) in file
     size_t numLines = 0;
@@ -55,7 +63,7 @@ ParsedData ReadFile(const char* path)
         *(data + i) = malloc(NUM_COLUMNS * sizeof(float));
 
         if (!(*(data + i))) {
-            printf("Memory: columns allocation at row(%zu)  failed\n", i);
+            fprintf(stderr, "Memory: columns allocation at row(%zu)  failed\n", i);
             fclose(ifilePtr);
         }
     }
@@ -105,22 +113,27 @@ void WriteClustersToFile(const char* path, ParsedData* data)
     ofilePtr = fopen(path, "w");
 
     if (!ofilePtr) {
-        printf("Resources: Could not open %s\n", path);
+        fprintf(stderr, "Resources: Could not open %s\n", path);
         return;
     }
 
-    // TODO: Optimize to work with n-Dimensions data points
+    // Text buffers for each formatted column (large enough for any float)
+    char xStr[64], yStr[64], clusterIdStr[64];
+
+    // TODO: Optimize to work with n-Dimensions data points.
     // Write each row to the output file
     for (size_t i = 0; i < data->numRows; ++i) {
+        FormatFloat(xStr, sizeof xStr, data->data[i][0]);
+        FormatFloat(yStr, sizeof yStr, data->data[i][1]);
+        FormatFloat(clusterIdStr, sizeof clusterIdStr, data->data[i][2]);
+
         int written = fprintf(
-            ofilePtr, "%.2f %.2f %.2f\n",
-            data->data[i][0],
-            data->data[i][1],
-            data->data[i][2]
+            ofilePtr, "%s %s %s\n",
+            xStr, yStr, clusterIdStr
         );
 
         if (written < 0) {
-            printf("Resources: Could not write row(%zu)\n", i);
+            fprintf(stderr, "Resources: Could not write row(%zu)\n", i);
             break;
         }
     }
@@ -164,7 +177,7 @@ float** CreateAccumulator(
         *(accumulator + i) = calloc(*numColsPerDP, sizeof(float));
 
         if (!(*(accumulator + i))) {
-            printf("CreateAccumulator: column mem allocation at row(%zu) failed\n", i);
+            fprintf(stderr, "CreateAccumulator: column mem allocation at row(%zu) failed\n", i);
             return NULL;
         }
            
@@ -179,6 +192,35 @@ float** CreateAccumulator(
 #endif
 
     return accumulator;
+}
+
+bool SelectRandomCentroids(size_t* centroidsPositions, size_t clusterCount, size_t numRows)
+{
+    // Holds every row index once; the front part gets shuffled into the picks
+    size_t* rowIndices = malloc(numRows * sizeof *rowIndices);
+
+    if (!rowIndices) {
+        fprintf(stderr, "SelectRandomCentroids: mem allocation failed\n");
+        return false;
+    }
+
+    for (size_t i = 0; i < numRows; ++i)
+        rowIndices[i] = i;
+
+    // Partial Fisher-Yates shuffle: swap a random not-yet-picked row into
+    // slot i, so every row can be picked at most once (no duplicate centroids)
+    for (size_t i = 0; i < clusterCount; ++i) {
+        size_t j = (size_t)GetRandomNumber((int)i, (int)(numRows - 1));
+
+        size_t temp = rowIndices[i];
+        rowIndices[i] = rowIndices[j];
+        rowIndices[j] = temp;
+
+        centroidsPositions[i] = rowIndices[i];
+    }
+
+    free(rowIndices);
+    return true;
 }
 
 float** GetCentroids(
@@ -199,7 +241,7 @@ float** GetCentroids(
         *(values + i) = malloc((data->numCols - 1) * sizeof(float));
 
         if (!(*(values + i))) {
-            printf("GetCentroids: column mem allocation at row(%zu) failed\n", i);
+            fprintf(stderr, "GetCentroids: column mem allocation at row(%zu) failed\n", i);
             return NULL;
         }
     }
@@ -336,6 +378,32 @@ void PrintArray(float** someArr, size_t row, size_t col)
     }
 }
 
+void FormatFloat(char* buffer, size_t size, float value)
+{
+    // Round to at most 2 decimal places
+    snprintf(buffer, size, "%.2f", value);
+
+    // Nothing to chop if there is no decimal point (e.g. nan, inf)
+    char* dotPos = strchr(buffer, '.');
+    if (!dotPos)
+        return;
+
+    // Walk back from the end, removing trailing zeroes
+    char* endPos = buffer + strlen(buffer) - 1;
+    while (endPos > dotPos && *endPos == '0') {
+        *endPos = '\0';
+        --endPos;
+    }
+
+    // Remove the decimal point if no digits are left after it
+    if (endPos == dotPos)
+        *endPos = '\0';
+
+    // Small negatives that round to zero would otherwise print as "-0"
+    if (strcmp(buffer, "-0") == 0)
+        strcpy(buffer, "0");
+}
+
 float EucDistSq2D(float* lhs, float* rhs)
 {
     return pow((lhs[0] - rhs[0]), 2) + pow((lhs[1] - rhs[1]), 2);
@@ -343,9 +411,15 @@ float EucDistSq2D(float* lhs, float* rhs)
 
 int GetRandomNumber(int min, int max)
 {
-    // Ensure min is lesser than max
-    if (min >= max)
+    // Ensure min is not greater than max (min == max simply returns min)
+    if (min > max)
         return -1;
 
-    return (rand() % (max - min + 1)) + min;
+    // rand() may only reach 32767 (e.g. on Windows), so combine two calls
+    // to cover ranges larger than RAND_MAX
+    unsigned long long randomValue =
+        (unsigned long long)rand() * ((unsigned long long)RAND_MAX + 1) + rand();
+    unsigned long long rangeSize = (unsigned long long)((long long)max - min + 1);
+
+    return (int)(randomValue % rangeSize) + min;
 }

@@ -1,0 +1,44 @@
+K-means Clustering - Test Report
+
+Test environment
+----------------
+VirtualBox VM on a Windows 11 host
+OS:     Ubuntu <version> (64-bit), kernel <version>
+CPU:    8 virtual cores
+RAM:    4 GB
+Disk:   100 GB
+Tools:  gcc <version>, gdb <version>, valgrind <version>
+
+
+Test datasets (test-data/)
+--------------------------
+large-10k.txt     10,000 points    0.12 MB
+large-100k.txt   100,000 points    1.2 MB
+large-1m.txt   1,000,000 points   12.4 MB
+
+Same format and value range (about -32 to 32) as kmeans-data.txt. The points
+come from 6 groups of different sizes and shapes, some overlapping, plus about
+2% scattered noise, so the data is not perfectly separated.
+
+
+Why the large datasets are large
+--------------------------------
+The given kmeans-data.txt has 1,797 points; large-1m.txt has 1,000,000
+(about 550 times more). Every iteration compares each point with every
+centroid, so with k = 6 one iteration is 6 million distance
+calculations. All points are held in memory at once, so memory use grows
+with the number of points (<...> MB for 1M points). This is big enough to
+show how time and memory scale, while still fitting in the VM's 4 GB.
+
+
+Results
+-------
+Measured with: /usr/bin/time -v ./kmeans <file>
+
+Dataset            Points     k   Time (s)   Peak memory (MB)
+kmeans-data.txt     1,797     <>     <>          <>
+large-10k.txt      10,000     6      <>          <>
+large-100k.txt    100,000     6      <>          <>
+large-1m.txt    1,000,000     6      <>          <>
+
+Valgrind (kmeans-data.txt): <result>

@@ -5,4 +5,5 @@
 *.exe
 
 # Generated clustering output
-/resources/kmeans-output.txt
+kmeans-output.txt
+Assignment Kmeans Clustring.pdf
